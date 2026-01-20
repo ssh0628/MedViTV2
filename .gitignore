@@ -1,0 +1,3 @@
+__pycache__/
+*.pyc
+*.json # json 필요 없으면
