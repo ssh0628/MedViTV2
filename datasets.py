@@ -1,3 +1,4 @@
+# datasets.py
 import os
 import json
 from torch.utils.data import DataLoader, random_split, Subset
@@ -17,6 +18,8 @@ import requests
 from zipfile import ZipFile
 import pandas as pd
 import shutil
+from sklearn.model_selection import train_test_split
+from PIL import Image
 
 # Set the random seed for reproducibility
 seed = 42
@@ -336,51 +339,45 @@ class KvasirDatasetDownloader:
 
 
 
-        
-        
-class JSONBoxDataset(data.Dataset):
-    def __init__(self, root, transform=None):
-        self.root = root
+class MyDataset(data.Dataset):
+    def __init__(self, file_paths, labels, transform=None, use_json=True):
+        self.file_paths = file_paths
+        self.labels = labels
         self.transform = transform
-        self.classes = sorted([d for d in os.listdir(root) if os.path.isdir(os.path.join(root, d))])
-        self.class_to_idx = {cls_name: i for i, cls_name in enumerate(self.classes)}
-        
-        self.samples = []
-        for target_class in self.classes:
-            class_dir = os.path.join(root, target_class)
-            for root_dir, _, filenames in os.walk(class_dir):
-                for filename in sorted(filenames):
-                    if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-                        path = os.path.join(root_dir, filename)
-                        json_path = os.path.splitext(path)[0] + '.json'
-                        if os.path.exists(json_path):
-                            self.samples.append((path, json_path, self.class_to_idx[target_class]))
+        self.use_json = use_json
 
     def __len__(self):
-        return len(self.samples)
+        return len(self.file_paths)
 
     def __getitem__(self, index):
-        path, json_path, target = self.samples[index]
-        image = default_loader(path)
-        
-        try:
-            with open(json_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            for item in data.get('labelingInfo', []):
-                if 'box' in item:
-                    box = item['box']['location'][0]
-                    x, y, w, h = int(box['x']), int(box['y']), int(box['width']), int(box['height'])
-                    image = image.crop((x, y, x + w, y + h))
-                    break
-        except Exception as e:
-            print(f"Error processing {json_path}: {e}")
-            
-        if self.transform is not None:
-            image = self.transform(image)
-            
-        return image, target
+        path = self.file_paths[index]
+        target = self.labels[index]
 
+        image = Image.open(path).convert('RGB')
+
+        if self.use_json:
+            json_path = os.path.splitext(path)[0] + '.json'
+            if os.path.exists(json_path):
+                try:
+                    with open(json_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+
+                    for item in data.get('labelingInfo', []):
+                        if 'box' in item:
+                            box = item['box']['location'][0]
+                            x = int(box['x'])
+                            y = int(box['y'])
+                            w = int(box['width'])
+                            h = int(box['height'])
+                            image = image.crop((x, y, x + w, y + h))
+                            break
+                except Exception as e:
+                    print(f"[WARN] JSON error: {json_path}, {e}")
+
+        if self.transform:
+            image = self.transform(image)
+
+        return image, target
         
 def build_dataset(args):
     train_transform, test_transform = build_transform(args)
@@ -445,11 +442,63 @@ def build_dataset(args):
 
     elif args.dataset == "MyDataset":
         data_dir = "./dataset/dataset"
-        full_dataset = JSONBoxDataset(root=data_dir)
-        total_len = len(full_dataset)
-        test_size = int(total_len * 0.15)
-        val_size = 0
-        train_size = total_len - test_size - val_size
+        # 1. Crawl directories
+        all_paths = []
+        all_labels = []
+        # Class mapping logic: A1->0, A2->1 ...
+        # Assume folders are named strictly or we sort them
+        classes = sorted([d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))])
+        class_to_idx = {cls_name: i for i, cls_name in enumerate(classes)}
+        nb_classes = len(classes)
+        
+        for cls_name in classes:
+            cls_dir = os.path.join(data_dir, cls_name)
+            for root, _, filenames in os.walk(cls_dir):
+                for filename in filenames:
+                    if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                        path = os.path.join(root, filename)
+                        all_paths.append(path)
+                        all_labels.append(class_to_idx[cls_name])
+
+        # 2. Stratified Split (80/20)
+        train_paths, test_paths, train_labels, test_labels = train_test_split(
+            all_paths, all_labels, test_size=0.2, stratify=all_labels, random_state=42
+        )
+
+        # 3. Custom Transforms with ImageNet stats
+        # Mean = [0.485, 0.456, 0.406], Std = [0.229, 0.224, 0.225]
+        custom_train_transform = transforms.Compose([
+            transforms.RandomResizedCrop(224),
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+        
+        custom_test_transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+
+        # 4. Create Datasets
+        train_dataset = MyDataset(
+            train_paths,
+            train_labels,
+            transform=custom_train_transform,
+            use_json=True
+        )
+
+        test_dataset = MyDataset(
+            test_paths,
+            test_labels,
+            transform=custom_test_transform,
+            use_json=True
+        )
+        
+        print(f"MyDataset Loaded: {nb_classes} classes")
+        print(f"Train size: {len(train_dataset)}, Test size: {len(test_dataset)}")
+        
+        return train_dataset, test_dataset, nb_classes
         
     else:
         raise NotImplementedError()
@@ -463,14 +512,15 @@ def build_dataset(args):
     train_dataset, val_dataset, test_dataset = random_split(full_dataset, [train_size, val_size, test_size])
 
     # Redefine split datasets with transforms
-    if args.dataset == 'MyDataset':
-        train_dataset = Subset(JSONBoxDataset(root=data_dir, transform=train_transform), train_dataset.indices)
-        val_dataset = Subset(JSONBoxDataset(root=data_dir, transform=test_transform), val_dataset.indices)
-        test_dataset = Subset(JSONBoxDataset(root=data_dir, transform=test_transform), test_dataset.indices)
-    else:
-        train_dataset = Subset(datasets.ImageFolder(root=data_dir, transform=train_transform), train_dataset.indices)
-        val_dataset = Subset(datasets.ImageFolder(root=data_dir, transform=test_transform), val_dataset.indices)
-        test_dataset = Subset(datasets.ImageFolder(root=data_dir, transform=test_transform), test_dataset.indices)
+    # Logic for MyDataset is handled above and returns early.
+    # Logic for others continues below.
+    if args.dataset != 'MyDataset':
+        if args.dataset == 'MyDataset' or args.dataset == 'mydataset':
+             pass # catch old logic if any remains but we return early above so this is unreachable for MyDataset
+        else:
+            train_dataset = Subset(datasets.ImageFolder(root=data_dir, transform=train_transform), train_dataset.indices)
+            val_dataset = Subset(datasets.ImageFolder(root=data_dir, transform=test_transform), val_dataset.indices)
+            test_dataset = Subset(datasets.ImageFolder(root=data_dir, transform=test_transform), test_dataset.indices)
 
     print("Number of the class = %d" % nb_classes)
 

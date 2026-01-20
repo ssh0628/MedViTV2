@@ -4,6 +4,7 @@ Email: omid_nejaty@alumni.iust.ac.ir
 
 MedViTV2: A Robust Vision Transformer for Generalized Medical Image Classification.
 """
+# MedViT.py
 from functools import partial
 import math
 from fasterkan import FasterKAN as KAN

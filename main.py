@@ -1,3 +1,4 @@
+# main.py
 import os
 import sys
 import numpy as np
@@ -16,7 +17,7 @@ import torchvision.datasets as dsets
 import torchvision.transforms as transforms
 from torchsummary import summary
 from datasets import build_dataset
-from distutils.util import strtobool
+
 from tqdm import tqdm
 import medmnist
 from medmnist import INFO, Evaluator
@@ -312,7 +313,8 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, default=24, help='Batch size for training.')
     parser.add_argument('--lr', type=float, default=0.0001, help='Learning rate.')
     parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs.')
-    parser.add_argument('--pretrained', type=lambda x: bool(strtobool(x)), default=False, help="Whether to use pretrained weights (True/False).")
+    parser.add_argument('--num_classes', type=int, default=6, help='Number of classes for custom dataset')
+    parser.add_argument('--pretrained', type=lambda x: x.lower() in ['true', '1', 'yes'], default=False, help="Whether to use pretrained weights (True/False).")
     parser.add_argument('--checkpoint_path', type=str, default='./checkpoint/MedViT_tiny.pth', help='Path to the checkpoint file.')
 
     args = parser.parse_args()
